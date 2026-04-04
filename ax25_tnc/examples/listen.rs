@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("where tnc-address is something like");
         println!("  tnc:linuxif:vk7ntk-2");
         println!("  tnc:tcpkiss:192.168.0.1:8001");
+        println!("  tnc:serialkiss:/dev/ttyUSB0:9600");
         std::process::exit(1);
     }
 
