@@ -32,10 +32,10 @@ Most developers will want to focus on `tnc::TncAddress` and `tnc::Tnc`.
 1. Generate or ask the user to supply an address string. This takes the form:  
    `tnc:tcpkiss:192.168.0.1:8001` or  
    `tnc:linuxif:vk7ntk-2` or  
-   `tnc:serialkiss:/dev/ttyUSB0:9600`
+    `tnc:serialkiss:/dev/ttyUSB0:9600` (must enable `serial` feature on `ax25_tnc`)
 2. Parse this to an address: `let addr = string.parse::<TncAddress>()?;`
 3. Attempt to open the TNC: `let tnc = Tnc::open(&addr)?;`
-4. Use `send_frame()` and `receive_frame()` to communicate on the radio.
+4. Use `send_frame()` and `incoming()` to communicate on the radio.
 5. The `Tnc` can be cloned for multithreaded use.
 
 If your application requires encoding/decoding AX.25 data directly, see the `frame` module.
