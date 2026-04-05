@@ -1,5 +1,12 @@
 # ax25 changelog
 
+## v0.4.0 - 5 April 2026
+
+* Support for serial KISS TNCs via `tnc:serialkiss:<device>:<baud>` (contributed by @dpogue VA7DPO)
+* Allow AX.25 addresses without an explicit SSID, defaulting to 0
+* Add `Default` and a simple UI frame constructor for `Ax25Frame`
+* Simplify the `Address` API with validated constructors/accessors and more derived traits
+
 ## v0.3.0 - 21 Aug 2023
 
 * Make `ax25` support no_std while having a default `std` feature
