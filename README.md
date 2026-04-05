@@ -31,7 +31,8 @@ The crate `ax25_tnc` provides:
 Most developers will want to focus on `tnc::TncAddress` and `tnc::Tnc`.
 1. Generate or ask the user to supply an address string. This takes the form:  
    `tnc:tcpkiss:192.168.0.1:8001` or  
-   `tnc:linuxif:vk7ntk-2`
+   `tnc:linuxif:vk7ntk-2` or  
+   `tnc:serialkiss:/dev/ttyUSB0:9600`
 2. Parse this to an address: `let addr = string.parse::<TncAddress>()?;`
 3. Attempt to open the TNC: `let tnc = Tnc::open(&addr)?;`
 4. Use `send_frame()` and `receive_frame()` to communicate on the radio.
@@ -56,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("where tnc-address is something like");
         println!("  tnc:linuxif:vk7ntk-2");
         println!("  tnc:tcpkiss:192.168.0.1:8001");
+        println!("  tnc:serialkiss:/dev/ttyUSB0:9600");
         std::process::exit(1);
     }
 
@@ -89,7 +91,6 @@ is available through its fields which are not printed here.
 
 Planned features:
 
-* Support for serial KISS TNCs (physical, TNC-Pi, Dire Wolf pseudo-tty)
 * Paclen management
 * More convenient send/receive interfaces for messing around with UI frames
 * Direct use of linux axports interfaces without `kissattach`

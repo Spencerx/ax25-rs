@@ -224,10 +224,7 @@ mod sys {
         if req.data.address_family() as i32 != AF_AX25 {
             return None;
         }
-        let hw_addr = match req.data.ax25_address() {
-            Some(addr) => addr,
-            None => return None,
-        };
+        let hw_addr = req.data.ax25_address()?;
 
         if unsafe { ioctl(fd, SIOCGIFINDEX, &mut req) } == -1 {
             return None;

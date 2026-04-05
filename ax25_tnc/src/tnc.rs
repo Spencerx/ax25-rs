@@ -13,6 +13,7 @@ use std::thread;
 pub enum TncError {
     OpenTnc { source: std::io::Error },
     InterfaceNotFound { callsign: String },
+    PortNotFound { device: String },
     SendFrame { source: std::io::Error },
     ReceiveFrame { source: std::io::Error },
     ConfigFailed { source: std::io::Error },
@@ -23,6 +24,7 @@ impl Error for TncError {
         match self {
             Self::OpenTnc { source } => Some(source),
             Self::InterfaceNotFound { .. } => None,
+            Self::PortNotFound { .. } => None,
             Self::SendFrame { source } => Some(source),
             Self::ReceiveFrame { source } => Some(source),
             Self::ConfigFailed { source } => Some(source),
@@ -38,6 +40,11 @@ impl fmt::Display for TncError {
                 f,
                 "Interface with specified callsign '{}' does not exist",
                 callsign
+            ),
+            Self::PortNotFound { device } => write!(
+                f,
+                "Specified serial port device '{}' does not exist",
+                device
             ),
             Self::SendFrame { source } => write!(f, "Unable to send frame: {}", source),
             Self::ReceiveFrame { source } => write!(f, "Unable to receive frame: {}", source),
@@ -63,6 +70,10 @@ pub enum ParseError {
         actual: usize,
     },
     InvalidPort {
+        input: String,
+        source: std::num::ParseIntError,
+    },
+    InvalidBaud {
         input: String,
         source: std::num::ParseIntError,
     },
@@ -93,6 +104,11 @@ impl fmt::Display for ParseError {
                 "Supplied port '{}' should be a number from 0 to 65535",
                 input
             ),
+            Self::InvalidBaud { input, .. } => write!(
+                f,
+                "Supplied baud rate '{}' should be a number like 4800 or 9600",
+                input
+            ),
         }
     }
 }
@@ -105,6 +121,16 @@ pub struct TcpKissConfig {
     pub host: String,
     /// Port number
     pub port: u16,
+}
+
+/// Configuration details for a Serial Port KISS TNC. This structure can be created
+/// directly or indirectly by parsing a string into a `TncAddress`.
+#[derive(PartialEq, Debug, Eq)]
+pub struct SerialKissConfig {
+    /// Device name or path for the serial port interface
+    pub device: String,
+    /// Baud rate for the serial port
+    pub baud: u32,
 }
 
 /// Configuration details for a TNC attached as a Linux network interface using
@@ -120,6 +146,7 @@ pub struct LinuxIfConfig {
 pub(crate) enum ConnectConfig {
     TcpKiss(TcpKissConfig),
     LinuxIf(LinuxIfConfig),
+    SerialKiss(SerialKissConfig),
 }
 
 /// A parsed TNC address that can be used to open a `Tnc`.
@@ -140,6 +167,13 @@ impl TncAddress {
     pub fn new_tcpkiss(tcpkiss: TcpKissConfig) -> Self {
         TncAddress {
             config: ConnectConfig::TcpKiss(tcpkiss),
+        }
+    }
+
+    /// Programmatically create a `TncAddress` pointing to a serial port KISS interface.
+    pub fn new_serialkiss(serialkiss: SerialKissConfig) -> Self {
+        TncAddress {
+            config: ConnectConfig::SerialKiss(serialkiss),
         }
     }
 }
@@ -188,6 +222,24 @@ impl FromStr for TncAddress {
                     }),
                 }
             }
+            "serialkiss" => {
+                if len != 4 {
+                    return Err(ParseError::WrongParameterCount {
+                        tnc_type: components[1].to_string(),
+                        expected: 2usize,
+                        actual: len - 2,
+                    });
+                }
+                TncAddress {
+                    config: ConnectConfig::SerialKiss(SerialKissConfig {
+                        device: components[2].to_string(),
+                        baud: components[3].parse().map_err(|e| ParseError::InvalidBaud {
+                            input: components[3].to_string(),
+                            source: e,
+                        })?,
+                    }),
+                }
+            }
             unknown => {
                 return Err(ParseError::UnknownType {
                     tnc_type: unknown.to_string(),
@@ -214,6 +266,7 @@ impl Tnc {
         let imp: Box<dyn TncImpl> = match &address.config {
             ConnectConfig::TcpKiss(config) => Box::new(TcpKissTnc::open(config)?),
             ConnectConfig::LinuxIf(config) => Box::new(LinuxIfTnc::open(config)?),
+            ConnectConfig::SerialKiss(config) => Box::new(SerialKissTnc::open(config)?),
         };
         Ok(Tnc(Arc::new(Mutex::new(TncInner::new(imp)))))
     }
@@ -394,6 +447,51 @@ impl TncImpl for TcpKissTnc {
     }
 }
 
+struct SerialKissTnc {
+    iface: Arc<kiss::SerialKissInterface>,
+}
+
+impl SerialKissTnc {
+    fn open(config: &SerialKissConfig) -> Result<Self, TncError> {
+        Ok(Self {
+            iface: Arc::new(
+                kiss::SerialKissInterface::new(&config.device, config.baud)
+                    .map_err(|e| TncError::OpenTnc { source: e })?,
+            ),
+        })
+    }
+}
+
+impl TncImpl for SerialKissTnc {
+    fn send_frame(&self, frame: &Ax25Frame) -> Result<(), TncError> {
+        self.iface
+            .send_frame(&frame.to_bytes())
+            .map_err(|e| TncError::SendFrame { source: e })
+    }
+
+    fn receive_frame(&self) -> Result<Ax25Frame, TncError> {
+        loop {
+            let bytes = self
+                .iface
+                .receive_frame()
+                .map_err(|e| TncError::ReceiveFrame { source: e })?;
+            if let Ok(parsed) = Ax25Frame::from_bytes(&bytes) {
+                return Ok(parsed);
+            }
+        }
+    }
+
+    fn clone(&self) -> Box<dyn TncImpl> {
+        Box::new(SerialKissTnc {
+            iface: self.iface.clone(),
+        })
+    }
+
+    fn shutdown(&self) {
+        self.iface.shutdown();
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -414,6 +512,15 @@ mod test {
             Ok(TncAddress {
                 config: ConnectConfig::LinuxIf(LinuxIfConfig {
                     callsign: "VK7NTK-2".to_string(),
+                })
+            })
+        );
+        assert_eq!(
+            "tnc:serialkiss:/dev/ttyUSB0:9200".parse::<TncAddress>(),
+            Ok(TncAddress {
+                config: ConnectConfig::SerialKiss(SerialKissConfig {
+                    device: "/dev/ttyUSB0".to_string(),
+                    baud: 9200
                 })
             })
         );
@@ -471,5 +578,25 @@ mod test {
                 _ => false,
             }
         );
+        assert!(match "tnc:serialkiss:".parse::<TncAddress>() {
+            Err(ParseError::WrongParameterCount {
+                tnc_type,
+                expected,
+                actual,
+            }) => {
+                tnc_type == "serialkiss" && expected == 2 && actual == 1
+            }
+            _ => false,
+        });
+        assert!(match "tnc:serialkiss:a:b:c".parse::<TncAddress>() {
+            Err(ParseError::WrongParameterCount {
+                tnc_type,
+                expected,
+                actual,
+            }) => {
+                tnc_type == "serialkiss" && expected == 2 && actual == 3
+            }
+            _ => false,
+        });
     }
 }

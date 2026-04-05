@@ -6,6 +6,15 @@ use std::net::ToSocketAddrs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+#[cfg(feature = "serial")]
+use serialport::{self, SerialPort};
+
+#[cfg(feature = "serial")]
+use std::time::Duration;
+
+#[cfg(not(feature = "serial"))]
+use std::io::{Error, ErrorKind};
+
 const FEND: u8 = 0xC0;
 const FESC: u8 = 0xDB;
 const TFEND: u8 = 0xDC;
@@ -74,6 +83,112 @@ impl TcpKissInterface {
 }
 
 impl Drop for TcpKissInterface {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+pub(crate) struct SerialKissInterface {
+    // Interior mutability is desirable so that we can clone the TNC and have
+    // different threads sending and receiving concurrently.
+    #[cfg(feature = "serial")]
+    tx_stream: Mutex<Box<dyn SerialPort>>,
+    #[cfg(feature = "serial")]
+    rx_stream: Mutex<Box<dyn SerialPort>>,
+    #[cfg(feature = "serial")]
+    buffer: Mutex<Vec<u8>>,
+    is_shutdown: AtomicBool,
+}
+
+impl SerialKissInterface {
+    #[allow(unused_variables)]
+    pub(crate) fn new(device: &str, baud: u32) -> io::Result<SerialKissInterface> {
+        #[cfg(feature = "serial")]
+        {
+            let tx_stream = serialport::new(device, baud)
+                .timeout(Duration::MAX)
+                .open()?;
+            let rx_stream = tx_stream.try_clone()?;
+            Ok(SerialKissInterface {
+                tx_stream: Mutex::new(tx_stream),
+                rx_stream: Mutex::new(rx_stream),
+                buffer: Mutex::new(Vec::new()),
+                is_shutdown: AtomicBool::new(false),
+            })
+        }
+
+        #[cfg(not(feature = "serial"))]
+        {
+            Err(Error::new(
+                ErrorKind::Unsupported,
+                "Serial port devices are not supported.",
+            ))
+        }
+    }
+
+    pub(crate) fn receive_frame(&self) -> io::Result<Vec<u8>> {
+        #[cfg(feature = "serial")]
+        {
+            loop {
+                {
+                    let mut buffer = self.buffer.lock().unwrap();
+                    if let Some(frame) = make_frame_from_buffer(&mut buffer) {
+                        return Ok(frame);
+                    }
+                }
+                let mut buf = vec![0u8; 1024];
+                let n_bytes = {
+                    let mut rx_stream = self.rx_stream.lock().unwrap();
+                    rx_stream.read(&mut buf)?
+                };
+                {
+                    let mut buffer = self.buffer.lock().unwrap();
+                    buffer.extend(buf.iter().take(n_bytes));
+                }
+            }
+        }
+
+        #[cfg(not(feature = "serial"))]
+        {
+            Err(Error::new(
+                ErrorKind::NotConnected,
+                "Serial port devices are not supported.",
+            ))
+        }
+    }
+
+    #[allow(unused_variables)]
+    pub(crate) fn send_frame(&self, frame: &[u8]) -> io::Result<()> {
+        #[cfg(feature = "serial")]
+        {
+            let mut tx_stream = self.tx_stream.lock().unwrap();
+            // 0x00 is the KISS command byte, which is two nybbles
+            // port = 0
+            // command = 0 (all following bytes are a data frame to transmit)
+            tx_stream.write_all(&[FEND, 0x00])?;
+            tx_stream.write_all(frame)?;
+            tx_stream.write_all(&[FEND])?;
+            tx_stream.flush()?;
+            Ok(())
+        }
+
+        #[cfg(not(feature = "serial"))]
+        {
+            Err(Error::new(
+                ErrorKind::NotConnected,
+                "Serial port devices are not supported.",
+            ))
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        if !self.is_shutdown.load(Ordering::SeqCst) {
+            self.is_shutdown.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for SerialKissInterface {
     fn drop(&mut self) {
         self.shutdown();
     }
